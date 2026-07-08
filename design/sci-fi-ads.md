@@ -1,6 +1,6 @@
-## Omni-Interaction: Agent Data Stream (ADS)
+## Sci-FI: Agent Data Stream (ADS)
 
-Agent Data Stream (ADS) adalah protokol transportasi data terpadu (Unified Transport Layer) yang menghubungkan seluruh agent dan runtime di dalam ekosistem Omni-Interaction.
+Agent Data Stream (ADS) adalah protokol transportasi data terpadu (Unified Transport Layer) yang menghubungkan seluruh agent dan runtime di dalam ekosistem Sci-FI.
 
 ---
 

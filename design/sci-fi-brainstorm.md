@@ -1,6 +1,6 @@
-# Sci-LM & HLM: Omni-Interaction Brainstorming Transcript
+# Sci-LM & HLM: Sci-FI Brainstorming Transcript
 
-Dokumen ini berisi salinan transkrip diskusi perancangan konsep Omni-Interaction, pembagian peran HLM & Sci-LM, hingga visualisasi arsitektur dan analisis model.
+Dokumen ini berisi salinan transkrip diskusi perancangan konsep Sci-FI, pembagian peran HLM & Sci-LM, hingga visualisasi arsitektur dan analisis model.
 
 ---
 

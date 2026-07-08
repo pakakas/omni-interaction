@@ -1,4 +1,4 @@
-## Omni-Interaction: Energen
+## Sci-FI: Energen
 
 Energen adalah runtime eksekusi untuk **Executable Graph Geometry (EGG)**.
 
@@ -43,9 +43,13 @@ Setiap kali frame baru tiba di AFB memory layout:
 [AFB Memory Buffer]
         │
         ▼
-[Step 1: ConstraintValidator (Shell)]
-  - Cek nilai bounds min/max dari static config.
-  - Normalisasi input ke [0.0, 1.0].
+[Step 1: InputScaler (Shell / Ingress)]
+  - Skala input dengan pembagian unit_scale:
+      latent = sensor_value / unit_scale
+    Nilai mengalir bebas — boleh negatif, boleh melebihi 1.0. Tidak ada clamping.
+    Target kisaran [0.0, 1.0] hanya untuk stabilitas numerik matriks, bukan batas keras.
+  - Jika input berelasi dengan 0xCIRCULAR, expand 1-channel angle fisis (radian)
+    menjadi 2-channel latent coordinates [sin_ch, cos_ch] secara mulus.
         │
         ▼
 [Step 2: InputEmbedder (Albumin)]
@@ -56,12 +60,20 @@ Setiap kali frame baru tiba di AFB memory layout:
   - Terapkan matriks mask (M) untuk meniadakan koneksi non-kausal (softmax score -> 0).
         │
         ▼
-[Step 4: CausalAttentionCore (Yolk)]
-  - Jalankan operasi dot-product attention yang sudah di-bake.
-  - Hitung status kelayakan (VALID/INVALID atau target aksi fisis).
+[Step 4: CausalAttentionCore (Yolk - Core Execution Loop)]
+  - Jalankan operasi dot-product attention yang sudah di-bake (tanpa branch/if-else).
+  - Untuk Dimensi Circular:
+    * Rotasi/Update Sudut: Dihitung via matriks rotasi 2D linear:
+      x_new = x*cos(dθ) - y*sin(dθ), y_new = x*sin(dθ) + y*cos(dθ).
+    * Proyeksi Gaya: Cukup mengalikan gaya total (F) dengan sumbu x/y (misal Fx = F * x).
+    * Beda/Selisih Sudut: Dihitung menggunakan dot product vektor (x1*x2 + y1*y2).
+  - Untuk Batas Konsensus:
+    * Pelanggaran dihitung secara branchless di ujung sirkuit via ReLU (max(0.0, actual - limit)).
         │
         ▼
-[Step 5: Output Router]
+[Step 5: Output Router (Egress)]
+  - Gabungkan kembali 2-channel latent coordinates circular [sin, cos] menjadi 1-channel
+    sudut fisis tunggal menggunakan atan2(sin, cos) jika dikirim ke actuator fisik.
   - Map memori output langsung ke buffer output yang berisi kumpulan **sci-token** `[Index_Int, Value_Float]` di AFB stream.
 ```
 

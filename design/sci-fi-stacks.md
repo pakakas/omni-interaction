@@ -1,4 +1,4 @@
-## Omni-Interaction: Technology Stacks
+## Sci-FI: Technology Stacks
 
 Dokumen ini mendefinisikan pembagian teknologi, konfigurasi kompilasi, dan integrasi antar-bahasa menggunakan **Bun (TypeScript)** dan **Zig**.
 

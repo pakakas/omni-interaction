@@ -1,6 +1,6 @@
-## Omni-Interaction: Agent Coder
+## Sci-FI: Agent Coder
 
-Usecase agent coder dalam pipeline Omni-Interaction.
+Usecase agent coder dalam pipeline Sci-FI.
 
 ---
 
@@ -91,7 +91,7 @@ Brain-agent delegate kembali ke hlm-agent dengan feedback dimensi yang dilanggar
 
 ### Perbedaan dengan Agent Coding Konvensional
 
-| Aspek | Konvensional | Omni-Coder |
+| Aspek | Konvensional | Sci-Coder |
 | --- | --- | --- |
 | **Validasi** | Pencocokan string aturan linter (heuristik/teks) | Evaluasi hukum formal CS via koordinat laten Sci-LM |
 | **Feedback Loop** | Iterasi heuristik dengan menyuapkan log error mentah (unstructured text) ke LLM | Iterasi terarah menggunakan kalkulasi kemudi vektor deviasi fisis ($\mathbf{d}$) |
@@ -262,7 +262,7 @@ Siklus perbaikan otomatis ketika kode dinyatakan `INVALID` oleh Sci-LM:
 
 ### Mekanisme Penanganan Diff dan Validasi Inkremental (Incremental Diff Validation)
 
-Mengirimkan seluruh berkas kode sumber mentah untuk ditulis ulang setiap kali terjadi pelanggaran batas kualitas sangatlah tidak efisien (memakan konteks token besar dan lambat). Oleh karena itu, Omni-Coder menerapkan skema **perbaikan berbasis diff inkremental**:
+Mengirimkan seluruh berkas kode sumber mentah untuk ditulis ulang setiap kali terjadi pelanggaran batas kualitas sangatlah tidak efisien (memakan konteks token besar dan lambat). Oleh karena itu, Sci-Coder menerapkan skema **perbaikan berbasis diff inkremental**:
 
 ```
 [ hlm-agent (Generate Diff) ] ──→ [ brain-agent (Apply Patch) ] ──→ [ AST Incremental Parser ]
