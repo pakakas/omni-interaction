@@ -92,28 +92,45 @@ Kalau `what`-nya belum terdaftar → Ovipar deklarasikan sebagai sumbu basis pri
 
 ---
 
-### Pipeline Kompilasi Detail (5 Tahapan)
+### Pipeline Kompilasi Detail (4 Tahapan)
 
-#### 1. Ingesti & Delegasi ke HLM
-* Ovipar membaca file sains mentah (`docs`: teks markdown, PDF, database).
-* **Mendelegasikan** konten teks ke HLM via `mt-infer` untuk ekstraksi kognitif.
-* HLM output: JSON berisi dimensi fisis, relasi rumus, dan tipe kausalitas.
+#### 1. Ingesti Dokumen Sains (LaTeX)
+* Ovipar menerima dokumen sains mentah (Raw Paper) yang umumnya mengandung deskripsi teoritis dan notasi rumus matematis berformat **LaTeX/TeX** ($\text{\LaTeX}$).
 
-#### 2. Atomisasi (Validasi Dimensi Primitif)
-* Ovipar menerima JSON dari HLM → validasi token ID dimensi terhadap registry.
-* Dimensi yang belum ada → deklarasikan sebagai **Atom** primitif baru di Shell.
-* Tanam nilai `unit_scale` dari output HLM ke Shell biner: `latent = sensor / unit_scale`.
-  - `unit_scale` bukan batas keras — hanya referensi skala agar nilai laten berkisar [0.0, 1.0].
-  - Nilai boleh negatif dan boleh melebihi 1.0. Tidak ada clamping.
+#### 2. Ekstraksi HLM ke ADN
+* Dokumen didelegasikan ke HLM (`mt-infer`) untuk mengekstrak rumus LaTeX dan memampatkan hubungan dimensi fisis tersebut menjadi struktur **ADN** (Agent Data Notation) berformat JSON terstruktur.
 
-#### 3. Molekularisasi (Causal DAG Wiring)
-* Bangun grafik kausalitas satu arah (Causal DAG) dari relasi `derives_from` di JSON.
-* Menyatukan $M \cdot L \cdot T^{-2}$ → molekul `0xFORCE` via instruksi Yolk.
-* Isi matriks **Membrane** (causal mask DAG).
+#### 3. Resolusi Dimensi & Yolk Wiring (Penyolderan Graf)
+* Ovipar menerima ADN, memetakan token ID dimensi terhadap registri lokal, menghitung normalisasi `unit_scale` (linear/circular), dan menyolder silsilah ketergantungan (Causal DAG) menjadi instruksi sirkuit Yolk.
 
-#### 4. Sintesis & Penyuntikan Gen
-* Kelompokkan dimensi ke dalam **GENE** spesifik perangkat (misal `sar_arm`, `singer_core`).
-* Ovipositor inject gen-gen ini ke segmen biner EGG terpisah.
+#### 4. Produksi EGG (Egg Laying)
+* Ovipositor mengemas tabel registri gen dan nilai inisial data state vector dari ADN menjadi berkas biner tunggal `.egg` terkompresi dengan penyelarasan memori 8-byte untuk dieksekusi oleh VM. Detail format biner kontainer diatur di berkas spesifikasi [sci-fi-egg.md](file:///F:/work/00-oss/maintenis/pakakas/sci-fi/design/sci-fi-egg.md).
 
-#### 5. Produksi EGG (Egg Laying)
-* Ovipositor tulis semua segmen (Shell, Albumin, Membrane, Yolk, Chalaza) ke berkas biner tunggal `.egg` dengan layout 8-byte aligned untuk `mmap` instan oleh **Energen**.
+
+---
+
+## 6. Mini Energen (Compile-Time Evaluator)
+
+Mini Energen adalah simulator deterministik murni matematika yang ditulis dalam TypeScript langsung di dalam pustaka `ovipar`. Tugasnya adalah melakukan **dry-run** dan **simulasi fungsional** terhadap instruksi wiring Yolk hasil ekstraksi HLM sebelum dibakar ke berkas biner `.egg`.
+
+### A. Alur Kerja Evaluasi
+Mini Energen menerima daftar instruksi penyolderan (`DimWireInstruction[]`) dan set nilai sensor fisik kasar dari host (`inputs: Record<string, number>`), lalu mengevaluasi nilai laten satu-per-satu sesuai urutan ketergantungan DAG:
+
+1. **Ingress Normalization**:
+   - Dimensi primitif linear: `latent = raw / unit_scale`.
+   - Dimensi sirkular (radian): Ditingkatkan dimensinya menjadi dual-channel koordinat unit circle $[sin, cos]$ di rentang $[0.0, 1.0]$:
+     $$\text{sin\_ch} = \frac{\sin(\theta_{\text{rad}}) + 1}{2}, \quad \text{cos\_ch} = \frac{\cos(\theta_{\text{rad}}) + 1}{2}$$
+2. **Yolk Execution Loop**:
+   Mengevaluasi operasi aljabar linier pada sumbu laten sesuai operator:
+   - **`multiply`**: 
+     - Scalar-scalar: $a \cdot b$
+     - Scalar-vector (proyeksi gaya circular): $s \cdot [x, y] = [s \cdot x, s \cdot y]$
+   - **`divide`**: $\frac{a}{b}$
+   - **`add`**: Penjumlahan linear atau penjumlahan vektor $[x_1 + x_2, y_1 + y_2]$
+   - **`power`**: $a^x$
+   - **`dot_product`**: Perkalian dot product untuk korelasi dua koordinat sirkular: $x_1 x_2 + y_1 y_2$
+   - **`relu`**: Deteksi pelanggaran batas konsensus: $\max(0.0, \text{actual} - \text{limit})$
+3. **Egress Reconstruction**:
+   Menghitung kembali koordinat circular unit vector $[x, y]$ menjadi sudut radian fisik tunggal untuk aktuator menggunakan:
+   $$\theta_{\text{rad}} = \text{atan2}(2 \cdot x - 1, 2 \cdot y - 1)$$
+

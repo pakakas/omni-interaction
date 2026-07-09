@@ -145,4 +145,107 @@ Pemisahan antara `Agent` (Client) dan `Energen` (Server) memiliki usecase yang s
 * Simulator fisik (seperti Gazebo/Webots) berjalan di satu komputer sebagai Client yang memompa data sensor AFB.
 * Sistem kendali Energen berjalan di komputer terpisah (atau SBC target seperti Raspberry Pi/Jetson) sebagai Server untuk memvalidasi performa kendali real-time terhadap model EGG sebelum diterjunkan ke robot asli.
 
+---
+
+## 4. Spesifikasi Teknis Implementasi VM (Zig)
+
+Berikut adalah pendetilan arsitektur internal Energen VM di tingkat bahasa Zig.
+
+### A. Integrasi Data Stream AFB
+Aliran data sensor input dan keputusan aksi output antara Host TS (Bun) dan VM Zig bertukar secara asinkron menggunakan buffer memori **Agent Frame Buffer (AFB)**. Format biner paket, hierarki Token ID, dan mekanisme double-buffering dijelaskan secara rinci di dalam dokumen [sci-fi-afb.md](file:///F:/work/00-oss/maintenis/pakakas/sci-fi/design/sci-fi-afb.md).
+
+
+### B. Pre-allocated Active Workspace
+Untuk menghindari lag Garbage Collector (GC) dan alokasi dinamis saat runtime, VM mengalokasikan satu blok RAM statis berukuran tetap sejak startup:
+
+```
++-------------------------------------------------------+
+|  Active State Vector (S_max = 128 x [f32, f32])       |
++-------------------------------------------------------+
+|  Active Count (u32)                                   |
++-------------------------------------------------------+
+```
+
+Setiap slot dimensi menampung **2 float32 values** (representasi $[x, y]$ atau $[\cos\theta, \sin\theta]$ untuk dimensi sirkular; dimensi linear hanya mengisi elemen pertama).
+
+### C. Dynamic Gene Prefix Translation (MMU Style)
+Mendukung eksekusi paralel dari gen template yang sama (misal `left_arm` dan `right_arm` berbagi model biner `arm.egg` yang sama) dengan melakukan translasi offset secara runtime:
+
+```
++---------------------+-------------------+
+|  Gene Prefix (16B)  | Base Offset (16B) |
++---------------------+-------------------+
+| 0x000A (left_arm)   |       0x04        |
+| 0x000B (right_arm)  |       0x0C        |
++---------------------+-------------------+
+```
+
+Setiap kali instruksi Yolk merujuk ke Local ID `0x0002` (misal arus motor), VM menghitung koordinat fisik di memori aktif menggunakan formula:
+$$\text{Physical\_Slot} = \text{Base\_Offset} + \text{Local\_ID}$$
+
+### D. Akselerasi SIMD Attention via Zig `@Vector`
+Operasi dot-product attention dieksekusi secara branchless menggunakan register hardware CPU:
+
+```zig
+pub fn dot_product_simd(a: [4]f32, b: [4]f32) f32 {
+    const va: @Vector(4, f32) = a;
+    const vb: @Vector(4, f32) = b;
+    const mul = va * vb;
+    return @reduce(.Add, mul);
+}
+```
+
+Kompilator Zig secara otomatis mereduksi ekspresi `@Vector` di atas menjadi instruksi vektor CPU target (e.g. `VFMADD` di AVX2 / AVX-512 atau `FMLA` di ARM NEON).
+
+### E. C-ABI FFI Protocol
+Fungsi-fungsi yang diekspor dari library dinamis Energen (`.dll` / `.so`) untuk dipanggil oleh TS Host:
+
+```zig
+// Alokasikan memori workspace statis
+export fn init_vm() ?*anyopaque;
+
+// Load file .egg biner ke slot base offset tertentu
+export fn load_gene(
+    vm: *anyopaque,
+    prefix: u16,
+    base_offset: u16,
+    egg_ptr: [*]const u8,
+    egg_len: usize
+) i32;
+
+// Jalankan satu frame step kalkulasi attention & constraint
+export fn execute_step(
+    vm: *anyopaque,
+    inputs_afb: [*]const f32,
+    inputs_count: u32,
+    outputs_afb: [*]f32,
+    outputs_count: u32
+) void;
+
+// Bebaskan memori workspace
+export fn deinit_vm(vm: *anyopaque) void;
+```
+
+### F. Guardrail Keamanan & Validasi mmap
+Untuk menjamin stabilitas VM dan mencegah crash akibat file `.egg` yang rusak atau dimanipulasi secara jahat (*malicious binary injection*), Energen menerapkan protokol validasi 3 lapis saat fase pemuatan memori:
+
+1. **Validasi Integritas Header (Size Check)**:
+   Segera setelah file dipetakan menggunakan `mmap` (dengan akses hanya-baca `PROT_READ`), VM memverifikasi keselarasan ukuran byte fisik file terhadap metadata header:
+   $$\text{Ukuran\_Fisik\_File} \ge 16 + (\text{GENE\_COUNT} \times 16) + \text{PAYLOAD\_SIZE}$$
+   Jika ukuran file lebih kecil dari batas minimum teoretis ini, file `.egg` langsung ditolak dan *unmapped* untuk mencegah pembacaan memori ilegal.
+
+2. **Validasi Batas Pointer Registri (OOB Guard)**:
+   Sebelum mengakses data nilai di dalam payload, VM melakukan iterasi ke seluruh daftar gen di dalam tabel registri untuk memvalidasi batas memori relatif:
+   $$\text{Byte\_Offset} + (\text{Value\_Count} \times 4) \le \text{PAYLOAD\_SIZE}$$
+   Jika ada satu pun entri gen yang memiliki offset data melebihi total ukuran payload, VM akan mendeteksi ini sebagai pelanggaran batas (*Out-of-Bounds*) dan langsung menghentikan proses ingesti secara aman tanpa memicu *Segmentation Fault*.
+
+3. **Sistem Fallback Loader**:
+   Jika pemanggilan `mmap` sistem operasi gagal karena masalah perizinan (*permission*), pembatasan lingkungan sandbox, atau penyimpanan jaringan yang tidak mendukung mapping, Energen secara otomatis beralih ke mode konvensional: membaca seluruh byte file langsung ke buffer RAM internal yang aman menggunakan `std.fs.File.readAll`, lalu menjalankan prosedur validasi yang sama.
+
+4. **Proteksi Lintas-Proses (MAP_PRIVATE & File Locking)**:
+   Untuk melindungi alamat memori VM dari manipulasi dinamis atau pemotongan file oleh proses luar yang berjalan di sistem operasi:
+   - **Isolasi Memori (`MAP_PRIVATE`)**: VM dipetakan menggunakan flag `MAP_PRIVATE` (Copy-on-Write) agar perubahan apa pun yang ditulis oleh proses lain ke file asli di disk setelah pemetaan selesai tidak akan menembus atau memengaruhi ruang memori virtual VM.
+   - **Kunci File Bersama (`File Locking`)**: Sebelum melakukan pemetaan, VM meminta kunci file bersama (Shared Lock: `flock` dengan `LOCK_SH` di POSIX/Unix, atau shared locking otomatis di Windows) untuk memblokir proses lain dari membuka berkas `.egg` dengan izin tulis (`write/truncate`) selama proses VM masih aktif.
+
+
 

@@ -170,7 +170,6 @@ Proses memproses EGG baru dibagi menjadi dua lapis pertahanan yang terpisah berd
 | `0xF5` | **`0xMAX_DIMENSIONS`** | `0.0` s/d `1.0` | Batas maksimum dimensi aktif ($N$) yang diizinkan oleh kebijakan sistem. |
 
 ---
-
 ### Anatomi & Formulasi `afb.egg`
 
 #### 1. Shell (Hard Bounds)
@@ -180,10 +179,10 @@ Menolak paket secara instan jika parameter dasar protokol dilanggar sebelum masu
 
 #### 2. Albumin (Data Injection & Normalization)
 Menerjemahkan status fisik dari data input yang ditarik dari *back-buffer* menjadi representasi vektor kontinu.
-*   **Formulasi Out of Range (`0xINPUT_OUT_OF_RANGE`)**:
-    Evaluasi dilakukan pada payload untuk memastikan seluruh nilai ($v_i$) patuh pada hukum $[0, 1]$:
-    $$\text{Val}(0xINPUT\_OUT\_OF\_RANGE) = \max_{i=1}^{N} \left( \mathbb{I}(v_i < 0.0) + \mathbb{I}(v_i > 1.0) \right)$$
-    Jika ditemukan satu saja dimensi dengan nilai di luar batas fisis, dimensi ini bernilai `1.0` (Anomaly Detected).
+*   **Formulasi Divergensi Input (`0xINPUT_DIVERGENCE`)**:
+    Evaluasi dilakukan pada payload untuk memastikan seluruh nilai ($v_i$) bebas dari kondisi NaN, tak-terhingga, atau luapan ekstrem (melebihi batas toleransi kasar $\pm 100.0$):
+    $$\text{Val}(0xINPUT\_DIVERGENCE) = \max_{i=1}^{N} \left( \mathbb{I}(v_i = \text{NaN}) + \mathbb{I}(|v_i| = \infty) + \mathbb{I}(|v_i| > 100.0) \right)$$
+    Jika ditemukan satu saja dimensi dengan nilai divergen atau luapan ekstrem, dimensi ini bernilai `1.0` (Divergence Detected).
 *   **Formulasi Derau Input (`0xINPUT_MUTATION_RATE`)**:
     Ngebandingin perubahan koordinat antara frame saat ini ($\mathbf{v}_t$) dan frame sebelumnya ($\mathbf{v}_{t-1}$):
     $$\Delta \mathbf{v} = \frac{||\mathbf{v}_t - \mathbf{v}_{t-1}||_2}{\sqrt{N}}$$
@@ -192,11 +191,11 @@ Menerjemahkan status fisik dari data input yang ditarik dari *back-buffer* menja
 #### 3. Membrane (Causal Mask)
 Menegakkan hukum ketergantungan kausalitas searah:
 *   Kondisi format biner dan ukuran (`0xINPUT_FORMAT_VALID`, `0xCURRENT_DIMENSIONS`, `0xMAX_DIMENSIONS`) dipaksa memengaruhi `0xINPUT_SAFETY_STATUS`.
-*   Perubahan nilai fisis (`0xINPUT_OUT_OF_RANGE`, `0xINPUT_MUTATION_RATE`) mengalir menuju `0xINPUT_SAFETY_STATUS`, namun status keamanan tidak diizinkan memengaruhi balik data input mentah.
+*   Deteksi anomali numerik dan derau (`0xINPUT_DIVERGENCE`, `0xINPUT_MUTATION_RATE`) mengalir menuju `0xINPUT_SAFETY_STATUS`, namun status keamanan tidak diizinkan memengaruhi balik data input mentah.
 
 #### 4. Yolk (Causal Attention Core)
 Evaluasi akhir status keamanan dihitung melalui perkalian attention matrix:
-$$\text{Val}(0xINPUT\_SAFETY\_STATUS) = \text{Attention}(Q_{safety}, K_{format} \cdot K_{range} \cdot K_{mutation})$$
+$$\text{Val}(0xINPUT\_SAFETY\_STATUS) = \text{Attention}(Q_{safety}, K_{format} \cdot K_{divergence} \cdot K_{mutation})$$
 Di mana attention core akan memproyeksikan status `1.0` (PASSED) jika dan hanya jika semua kunci (*keys*) keamanan berada pada rentang aman masing-masing.
 
 ---

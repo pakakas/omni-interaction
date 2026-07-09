@@ -1,0 +1,22 @@
+{
+  "source": {
+    "title": "Quantum Thermal Dynamics",
+    "domain": "physics",
+    "confidence": 0.98
+  },
+  "dimensions": [
+    {
+      "name": "Temperature",
+      "proposed_id": "0x0004",
+      "op": "primitive",
+      "unit_scale": 100
+    },
+    {
+      "name": "RotorAngle",
+      "proposed_id": "0x0009",
+      "op": "special",
+      "derives_from": ["0xCIRCULAR"]
+    }
+  ],
+  "causal_wires": []
+}

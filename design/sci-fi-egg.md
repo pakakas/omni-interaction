@@ -1,6 +1,8 @@
 ## Executable Graph Geometry (EGG)
 
-Trained model. Struktur internalnya beranatomi seperti telur:
+**Executable Graph Geometry (EGG)** adalah format berkas biner terkompresi yang menampung model hukum sains hasil kompilasi **Ovipar**. Berkas `.egg` dirancang agar selaras dengan memori (*memory aligned*) sehingga dapat dipetakan langsung menggunakan `mmap` ke ruang alamat memori **Energen VM** tanpa overhead parsing atau alokasi heap dinamis saat runtime.
+
+Secara anatomi logis, struktur internal berkas ini dimodelkan seperti anatomi telur fisis:
 
 ```
                ,---------------,
@@ -19,131 +21,76 @@ Trained model. Struktur internalnya beranatomi seperti telur:
               '-----------------'
 ```
 
-### Shell
-Cangkang luar keras (*ingestion-time validator*). Berada di lapisan terluar kontainer EGG. Hanya digunakan **satu kali** saat Agent pertama kali memproses ("makan") berkas EGG untuk memvalidasi bahwa batas fisis dan konfigurasi dimensi EGG cocok dengan spesifikasi fisik robot. Setelah EGG tervalidasi dan gen di-splice ke Energen, Shell dilepas/dibuang dari memori RAM.
+### Anatomi Logis EGG
 
-### Albumin
-Lapisan putih telur (*embedding layer*). Saat runtime, data aktif **AFB** mengalir masuk langsung ke sini. Albumin bertugas menerjemahkan data fisis kasar AFB menjadi representasi vektor laten internal.
-
-### Membrane
-Selaput kuning telur (*causal mask layer*). Berada di dalam Albumin, bertugas membungkus secara khusus hanya **Yolk** dan **Blastodisc (GENE)**. Berfungsi menegakkan hukum kausalitas DAG pada sirkuit attention dengan memblokir relasi yang tidak logis secara fisis.
-
-### Yolk
-Kuning telur (*core attention weights*). Berada di dalam lindungan Membrane bersama Blastodisc (GENE). Di sinilah matriks bobot attention (*self-attention* & *cross-attention*) disimpan sebagai nutrisi logika fisis.
-
-### Chalaza
-Tali kuning telur (*regularization anchor*). Menambatkan Yolk agar tidak bergeser (*drift*) dari struktur kausal saat fine-tuning lokal.
+1.  **Shell**: Cangkang luar keras (*ingestion-time validator*). Bertugas memvalidasi bahwa batas fisis dan konfigurasi dimensi EGG cocok dengan spesifikasi fisik robot sebelum diserap oleh VM.
+2.  **Albumin**: Lapisan putih telur (*embedding layer*). Bertugas menerjemahkan data fisis kasar AFB menjadi representasi vektor laten internal saat runtime.
+3.  **Membrane**: Selaput kuning telur (*causal mask layer*). Bertugas membungkus Yolk dan menegakkan hukum kausalitas DAG pada sirkuit attention.
+4.  **Yolk**: Kuning telur (*core attention weights*). Di sinilah matriks bobot attention (*self-attention* & *cross-attention*) disimpan sebagai logika fisis.
+5.  **Chalaza**: Tali kuning telur (*regularization anchor*). Menambatkan Yolk agar tidak bergeser (*drift*) dari struktur kausal saat fine-tuning lokal.
 
 ---
 
-### Alur Kerja Sistem (Ingestion vs. Runtime)
+### 1. Struktur Biner Kontainer EGG (Layout v1)
 
-#### A. Fase Makan Telur (Ingestion-Time - Pake Shell)
-```
-[ Berkas .egg ] ──► [ Baca Shell ] ──► (Validasi Batas Fisik Robot?)
-                                              │
-                      ┌───────────────────────┴───────────────────────┐
-                      ▼ YA                                            ▼ TIDAK
-         [ Splicing GENE ke Energen ]                           [ Tolak & Buang EGG ]
-         (Buang Shell/Kontainer EGG)
-```
+Berkas `.egg` disusun sebagai blok biner linier tunggal dengan tiga segmen utama:
 
-#### B. Fase Jalan (Active Runtime - AFB Langsung Masuk)
 ```
-[ Data Aktif AFB ] 
-        │
-        ▼ (Tanpa lewat Shell)
-     Albumin      (Proyeksi ke Vektor Laten)
-        │
-        ▼ (Masuk ke Selaput Membran)
-  ========================================= [ Selaput MEMBRANE ]
-    [ Blastodisc/GENE ] ──(Membaca & Ngatur)
-         │                                 
-         ▼ (Proses & Asimilasi)             
-      [ Yolk ]       (Kalkulasi Causal Attention)
-  =========================================
-         │
-         ▼
-   [ Sinyal Aksi ]
++-------------------------------------------------------+
+|  Header (16 bytes)                                    |
++-------------------------------------------------------+
+|  Gene Register Table (gene_count x 16 bytes)          |
+|  - Aligned to 8 bytes                                 |
++-------------------------------------------------------+
+|  Gene Payload (Float32 arrays)                        |
+|  - Aligned to 8 bytes per gene                        |
++-------------------------------------------------------+
 ```
-
-
 
 ---
 
-### Spesifikasi Layout File Biner EGG (`.egg`)
+### 2. Spesifikasi Segmen Biner
 
-Berkas `.egg` disimpan sebagai file biner linier tunggal dengan spesifikasi header dan alignment byte sebagai berikut untuk mendukung `mmap` instan:
+#### A. Header Utama (Offset `0x00` - `0x0F`)
+Header berukuran **16 bytes** (selaras 8-byte) yang mengidentifikasi tipe berkas, versi kontainer, dan batas ukuran payload:
 
-#### 1. Header Container Utama (Offset 0x00 - 0x47)
-Header ini menempati **72 bytes** pertama berkas untuk mengidentifikasi berkas dan menunjukkan lokasi tabel registri gen, lokasi segmen global (Shell, Albumin, Membrane, Yolk, Chalaza), serta tanda tangan keamanan:
-
-| Byte Range | Tipe Data | Nama Field | Deskripsi |
+| Range Byte | Tipe Data | Nama Field | Deskripsi |
 | --- | --- | --- | --- |
-| `0x00` - `0x01` | `uint16` | `MAGIC` | Identitas berkas sekaligus versi, diset kaku ke **`0xE661`** (EGG v1). |
-| `0x02` - `0x03` | `uint16` | `GENE_COUNT` | Jumlah gen aktif yang terdaftar di dalam `GENE_REGISTER_TABLE`. |
-| `0x04` - `0x07` | `uint32` | `PADDING` | Byte kosong penyelarasan memori ke batas 8-byte. |
-| `0x08` - `0x0F` | `uint64` | `REGISTRY_OFFSET` | Alamat awal (offset byte) tabel `GENE_REGISTER_TABLE`. |
-| `0x10` - `0x17` | `uint64` | `GLOBAL_SHELL_OFFSET` | Alamat awal segmen **Shell global** (kumpulan semua batas dimensi). |
-| `0x18` - `0x1F` | `uint64` | `GLOBAL_ALBUMIN_OFFSET` | Alamat awal segmen **Albumin global** (matriks proyeksi input). |
-| `0x20` - `0x27` | `uint64` | `GLOBAL_MEMBRANE_OFFSET` | Alamat awal segmen **Membrane global** (matriks causal mask DAG). |
-| `0x28` - `0x2F` | `uint64` | `GLOBAL_YOLK_OFFSET` | Alamat awal segmen **Yolk global** (tensor bobot causal attention). |
-| `0x30` - `0x37` | `uint64` | `GLOBAL_CHALAZA_OFFSET` | Alamat awal segmen **Chalaza global** (vektor anchor). |
-| `0x38` - `0x3F` | `uint64` | `SIGNATURE_OFFSET` | Alamat awal (offset byte) tanda tangan keamanan di ekor berkas. |
-| `0x40` - `0x47` | `uint64` | `SIGNATURE_LENGTH` | Ukuran tanda tangan Ed25519 (selalu 64 bytes / `0x40`). |
+| `0x00` - `0x01` | `uint16` | `MAGIC` | Identitas tanda tangan berkas (big-endian), diset kaku ke **`0xE661`**. |
+| `0x02` - `0x03` | `uint16` | `VERSION` | Versi format biner kontainer (little-endian), diset kaku ke **`1`**. |
+| `0x04` - `0x07` | `uint32` | `GENE_COUNT` | Jumlah total entri gen yang terdaftar di dalam Tabel Registri (little-endian). |
+| `0x08` - `0x0B` | `uint32` | `PAYLOAD_SIZE` | Total ukuran byte dari seluruh segmen payload gen (little-endian). |
+| `0x0C` - `0x0F` | `uint32` | `RESERVED` | Cadangan untuk penyelarasan memori, diset kaku ke **`0`**. |
 
 ---
 
-#### 2. Tabel Registri Gen (`GENE_REGISTER_TABLE`)
-Tabel ini bertugas memetakan fungsionalitas **GENE** (DNA) ke dalam potongan (*slices*) segmen global di atas. Tabel ini berupa **Pure Array** berisi descriptor gen kustom berukuran **16 bytes per entry** (sangat hemat memori & selaras 64-bit):
+#### B. Tabel Registri Gen (`GENE_REGISTER_TABLE`)
+Tabel ini bertugas memetakan alokasi masing-masing gen di dalam blok memori payload. Tabel dimulai tepat pada offset **`0x10`**, dengan ukuran **16 bytes per entri** (little-endian):
 
-*   **Array Gene Descriptors (16 bytes per entry)**:
-    *   `Gene_Prefix` (`2 bytes`, `uint16`): Awalan namespace gen (misal `0x000A` untuk `sar_arm`).
-    *   `Dim_Start` (`2 bytes`, `uint16`): Indeks awal dimensi gen ini di dalam Shell/AFB global.
-    *   `Dim_Count` (`2 bytes`, `uint16`): Jumlah dimensi aktif yang dimiliki oleh gen ini.
-    *   `Padding` (`2 bytes`, `uint16`): Byte kosong penyelarasan memori 32-bit (selalu `0x00`).
-    *   `Yolk_Slice_Offset` (`4 bytes`, `uint32`): Offset relatif lokasi bobot attention gen ini di dalam Yolk global.
-    *   `Yolk_Slice_Length` (`4 bytes`, `uint32`): Panjang ukuran bobot attention gen ini di dalam Yolk global.
-
----
-
-#### 3. Struktur Segmen Data Global EGG
-Setiap segmen data global yang ditunjuk oleh Header Utama harus selaras 8-byte dan memiliki struktur biner sebagai berikut:
-
-##### A. Segmen Shell Global (Constraint Validator)
-Merupakan array dari seluruh konfigurasi dimensi aktif dalam EGG. Setiap entri dimensi berukuran **16 bytes** (8-byte aligned):
-*   `Dimension_ID` (`4 bytes`, `uint32`): Kombinasi `Gene_Prefix (2B) | Local_Index (2B)`.
-*   `Min_Limit` (`4 bytes`, `float32`): Batas bawah koordinat fisis.
-*   `Max_Limit` (`4 bytes`, `float32`): Batas atas koordinat fisis.
-*   `Padding` (`4 bytes`, `uint32`): Padding penyelarasan memori (statis `0x00000000`).
+| Offset Relatif | Tipe Data | Nama Field | Deskripsi |
+| --- | --- | --- | --- |
+| `+0` (4 bytes) | `uint32` | `Dimension_ID` | Token ID dimensi fisis unik (misal: `0x0004` untuk `CURRENT`). |
+| `+4` (4 bytes) | `uint32` | `Byte_Offset` | Offset awal data gen ini dihitung dari awal segmen Payload (harus kelipatan 8). |
+| `+8` (4 bytes) | `uint32` | `Value_Count` | Jumlah nilai float32 yang disimpan. `1` untuk linear, `2` untuk circular. |
+| `+12` (4 bytes) | `float32` | `Unit_Scale` | Skala normalisasi lembut (*soft-scaling*) untuk sumbu laten fisis ini. |
 
 > [!NOTE]
-> Klasifikasi dimensi (seperti circular vs. linear) tidak disimpan sebagai metadata kaku (`Kind`) di dalam biner, melainkan didefinisikan murni sebagai hubungan ketetanggaan (relasi graf) di segmen **Membrane** ke Dimensi Jangkar khusus (`0xCIRCULAR` untuk circularity, dan `0xCONSENSUS` untuk batas pengawasan). Hal ini meminimalkan bloat memori dan menjaga format biner tetap terpadu.
-
-##### B. Segmen Albumin Global (Input Projector)
-Matriks bobot proyeksi linear ($D \times E$ Float32) untuk mengubah seluruh payload input AFB mentah menjadi embedding vektor laten.
-
-##### C. Segmen Membrane Global (Causal Mask)
-Matriks ketetanggaan (*adjacency matrix*) global berukuran $D \times D$ Float32. Berisi nilai `0.0` (diizinkan) atau `-infinity` (`0xFF800000` - memblokir total sirkuit attention).
-
-##### D. Segmen Yolk Global (Causal Attention Core)
-Kumpulan seluruh tensor bobot attention Float32 (Query, Key, Value) milik semua gen yang digabungkan secara linier di dalam berkas.
-
-##### E. Segmen Chalaza Global (Anchor Constraints)
-Vektor Float32 berisi batasan deviasi regulasi (*anchor constraints*) untuk seluruh dimensi aktif.
+> Panjang tabel adalah `GENE_COUNT * 16` bytes. Jika panjang tabel tidak kelipatan 8, padding kosong (`0x00`) akan ditambahkan di akhir tabel untuk memastikan segmen payload berikutnya tetap selaras pada batas 8-byte (*8-byte boundary*).
 
 ---
 
-#### 4. Tanda Tangan Keamanan (Ed25519 Signature)
-Terletak pada offset yang ditunjuk oleh `SIGNATURE_OFFSET` (biasanya berada di 64 bytes terakhir berkas). Berisi tanda tangan digital Ed25519 untuk memvalidasi integritas seluruh data biner kontainer dari bytes `0x00` hingga `SIGNATURE_OFFSET - 1`.
+#### C. Payload Gen (`Gene Payload`)
+Segmen payload menampung nilai numerik awal (*initial states*) dari dimensi-dimensi aktif dalam bentuk **Float32 array** linier:
+*   Setiap gen menempati ruang memori sebesar `Value_Count * 4` bytes.
+*   Penyelarasan **8-byte alignment** wajib diterapkan pada akhir data masing-masing gen. Jika `Value_Count` ganjil (seperti sumbu linear dengan `Value_Count = 1` yang memakan 4 bytes), ditambahkan padding kosong sebesar 4 bytes sebelum data gen berikutnya ditulis.
 
 ---
 
-#### Aturan Kompilasi Biner:
-1. **Memory Alignment**: Semua array data numerik (terutama bobot tensor Float32) wajib di-pad dengan byte kosong (`0x00`) agar alamat offset awalnya dimulai pada kelipatan 8-byte. Hal ini krusial agar CPU/NPU dapat melakukan instruksi pemrosesan paralel SIMD langsung di atas pointer memori terpetakan.
-2. **Modular Slicing**: EGG disusun dengan memusatkan data ke level global, sedangkan tabel registri menyimpan irisan (*slices*) indeksnya. Hal ini mempermudah Energen melakukan pemuatan modular saat runtime.
+### 3. Keunggulan Desain Penyederhanaan EGG v1
 
-
+1.  **Zero-Heap & Fast Boot**: VM Energen dapat langsung memetakan berkas `.egg` menggunakan `mmap` dan membaca data dari pointer memori fisik secara langsung tanpa melakukan alokasi memori heap baru atau *copying* data.
+2.  **Akselerasi SIMD Ramah CPU/NPU**: Penyelarasan memori kaku 8-byte memastikan pointer Float32 array dapat dimuat langsung ke dalam register CPU vector (`@Vector` di Zig / AVX2 / ARM NEON) secara branchless tanpa penalti *unaligned memory access*.
+3.  **Bebas Metadata Kind & Limit**: Klasifikasi tipe dimensi (circular vs linear) tidak membutuhkan *type flags* atau batas limit keras fisis di level biner EGG. Karakteristik circular dan batas consensus diidentifikasi murni lewat relasi graf (Causal DAG / ADN) yang disolder ke instruksi sirkuit Yolk.
 
 ---
 
@@ -183,7 +130,6 @@ Saat berkas `.egg` selesai dicerna ("menetas"), seluruh metafora biologis dilepa
 └────────────────────────────────────────────────────────┘
 ```
 
-
 ---
 
 ### Komposisi EGG via Gene Injection & Lazy Loading
@@ -217,9 +163,9 @@ Saat robot menyala, Energen tidak me-load seluruh isi EGG ke memori untuk menghe
 ### Metafora Operasional: Bot "Makan Telur"
 
 Untuk menggambarkan bagaimana sistem memperoleh kemampuan baru secara dinamis, kita menggunakan metafora **asimilasi genetik** dengan aturan retensi memori sebagai berikut:
-* **Satu Agent Bisa Makan Banyak `.egg`**: Agent dapat memproses beberapa berkas EGG sekaligus (misal `pisik.egg`, `chem.egg`, `ekonomi.egg`) untuk memperluas kemampuannya.
-* **Kontainer Sekali Pakai (*Single-Use Container*)**: Data pembungkus EGG (Shell, Albumin, Membrane, Yolk, Chalaza) bersifat transien/sekali pakai. Setelah gen diekstrak dan divalidasi, sisa data kontainer ini langsung dibuang (*unmapped*) dari memori RAM atau ditidurkan (*sleep*) untuk menghemat sumber daya.
-* **Gen Hidup Berulang (*Reusable Genes*)**: Hanya segmen **GENE** (DNA aktif) yang tetap hidup menetap di dalam mesin **Energen** secara permanen dan dieksekusi berulang-ulang tiapkali ada aliran data AFB baru masuk.
+*   **Satu Agent Bisa Makan Banyak `.egg`**: Agent dapat memproses beberapa berkas EGG sekaligus (misal `pisik.egg`, `chem.egg`, `ekonomi.egg`) untuk memperluas kemampuannya.
+*   **Kontainer Sekali Pakai (*Single-Use Container*)**: Data pembungkus EGG (Shell, Albumin, Membrane, Yolk, Chalaza) bersifat transien/sekali pakai. Setelah gen diekstrak dan divalidasi, sisa data kontainer ini langsung dibuang (*unmapped*) dari memori RAM atau ditidurkan (*sleep*) untuk menghemat sumber daya.
+*   **Gen Hidup Berulang (*Reusable Genes*)**: Hanya segmen **GENE** (DNA aktif) yang tetap hidup menetap di dalam mesin **Energen** secara permanen dan dieksekusi berulang-ulang tiapkali ada aliran data AFB baru masuk.
 
 ```
 [ Agent / Bot ] ──(Makan .egg)──→ [ Ingesti (Energen) ] 
@@ -236,7 +182,3 @@ Untuk menggambarkan bagaimana sistem memperoleh kemampuan baru secara dinamis, k
    Energen memetakan berkas biner tersebut ke memori, membaca cangkang (**Shell**) untuk validasi batas fisik, mencocokkan tanda tangan Ed25519, lalu menyerap data **GENE** di dalemnya. Setelah proses asimilasi selesai, memori penampung kontainer EGG global langsung dibuang/dilepas.
 3. **Splicing & Reaktivitas (Expression - Reusable)**:
    Segmen **GENE** yang berhasil diekstrak disambungkan secara permanen ke dalam untai runtime Energen. Gen ini terus hidup secara aktif dan mengeksekusi sirkuit logika fisisnya secara berulang-ulang pada setiap detik iterasi data AFB tanpa perlu memanggil berkas `.egg` aslinya lagi.
-
-
-
-
